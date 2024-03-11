@@ -10,51 +10,31 @@ import net.mikaelzero.mojito.loader.glide.GlideProgressSupport.expect
 import net.mikaelzero.mojito.loader.glide.GlideProgressSupport.forget
 import java.io.File
 
-abstract class ImageDownloadTarget private constructor(
-    private val width: Int,
-    private val height: Int,
+abstract class ImageDownloadTarget(
+    private val width: Int = Target.SIZE_ORIGINAL,
+    private val height: Int = Target.SIZE_ORIGINAL,
     private val mUrl: String
-) : Target<File>,
-    GlideProgressSupport.ProgressListener {
+) : Target<File>, GlideProgressSupport.ProgressListener {
+
     private var request: Request? = null
 
-    protected constructor(url: String) : this(
-        Target.SIZE_ORIGINAL,
-        Target.SIZE_ORIGINAL,
-        url
-    ) {
-    }
-
-    override fun onResourceReady(
-        resource: File,
-        transition: Transition<in File>?
-    ) {
-        forget(mUrl)
-    }
-
-    override fun onLoadCleared(placeholder: Drawable?) {
-        forget(mUrl)
-    }
-
-    override fun onLoadStarted(placeholder: Drawable?) {
-        expect(mUrl, this)
-    }
-
-    override fun onLoadFailed(errorDrawable: Drawable?) {
-        forget(mUrl)
-    }
-
-    /**
-     * Immediately calls the given callback with the sizes given in the constructor.
-     *
-     * @param cb {@inheritDoc}
-     */
-    override fun getSize(cb: SizeReadyCallback) {
+    init {
         require(Util.isValidDimensions(width, height)) {
-            ("Width and height must both be > 0 or Target#SIZE_ORIGINAL, but given" + " width: "
-                    + width + " and height: " + height + ", either provide dimensions in the constructor"
-                    + " or call override()")
+            "Width and height must both be > 0 or Target#SIZE_ORIGINAL, but given " +
+                    "width: $width and height: $height, either provide dimensions in the constructor " +
+                    "or call override()"
         }
+    }
+
+    override fun onResourceReady(resource: File, transition: Transition<in File>?) = forget(mUrl)
+
+    override fun onLoadCleared(placeholder: Drawable?) = forget(mUrl)
+
+    override fun onLoadStarted(placeholder: Drawable?) = expect(mUrl, this)
+
+    override fun onLoadFailed(errorDrawable: Drawable?) = forget(mUrl)
+
+    override fun getSize(cb: SizeReadyCallback) {
         cb.onSizeReady(width, height)
     }
 
@@ -66,9 +46,7 @@ abstract class ImageDownloadTarget private constructor(
         this.request = request
     }
 
-    override fun getRequest(): Request? {
-        return request
-    }
+    override fun getRequest(): Request? = request
 
     override fun onStart() {
         // Do nothing.
@@ -81,5 +59,4 @@ abstract class ImageDownloadTarget private constructor(
     override fun onDestroy() {
         // Do nothing.
     }
-
 }
