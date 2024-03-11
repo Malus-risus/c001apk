@@ -15,26 +15,24 @@ import com.example.c001apk.ui.home.ItemTouchHelperCallback
 import com.google.android.flexbox.FlexDirection
 import com.google.android.flexbox.FlexWrap
 import com.google.android.flexbox.FlexboxLayoutManager
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.regex.Pattern
 
-
 class CopyActivity : BaseActivity<ActivityCopyBinding>() {
 
     private lateinit var mAdapter: HomeMenuAdapter
     private lateinit var mLayoutManager: FlexboxLayoutManager
-    private var menuList: ArrayList<HomeMenu> = ArrayList()
+    private var menuList: MutableList<HomeMenu> = mutableListOf()  // Using MutableList instead of ArrayList for Kotlin idiomatic
     private val homeMenuDao by lazy {
         HomeMenuDatabase.getDatabase(this).homeMenuDao()
     }
 
     private fun getAllLinkAndText(str: String?): String {
-        return if (TextUtils.isEmpty(str)) "" else
-            Pattern.compile("<a class=\"feed-link-url\"\\s+href=\"([^<>\"]*)\"[^<]*[^>]*>")
-                .matcher(str).replaceAll(" $1 ")
+        if (TextUtils.isEmpty(str)) return ""
+        val pattern = Pattern.compile("<a class=\"feed-link-url\"\\s+href=\"([^<>\"]*)\"[^<]*[^>]*>")
+        return pattern.matcher(str).replaceAll(" $1 ")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,60 +41,58 @@ class CopyActivity : BaseActivity<ActivityCopyBinding>() {
         intent.getStringExtra("text")?.let {
             val linkText = getAllLinkAndText(it)
             binding.textView.text = Html.fromHtml(
-                linkText.replace("\n", " <br/>"),
+                linkText.replace("\n", "<br />"),
                 Html.FROM_HTML_MODE_COMPACT
-            ).toString()
-            return
+            )
         }
 
-        val type: String? = intent.getStringExtra("type")
-
-        if (type != null && type == "homeMenu") {
-            binding.done.visibility = View.VISIBLE
-            CoroutineScope(Dispatchers.IO).launch {
-                menuList.addAll(homeMenuDao.loadAll())
-                withContext(Dispatchers.Main) {
+        intent.getStringExtra("type")?.let { type ->
+            if (type == "homeMenu") {
+                binding.done.visibility = View.VISIBLE
+                
+                launch {
+                    menuList = homeMenuDao.loadAll() as MutableList<HomeMenu>
                     initView()
                 }
             }
         }
 
         binding.done.setOnClickListener {
-            var i = 0
-            CoroutineScope(Dispatchers.IO).launch {
-                homeMenuDao.deleteAll()
-                for (element in menuList) {
-                    homeMenuDao.insert(
-                        HomeMenu(
-                            i,
-                            element.title,
-                            element.isEnable
-                        )
-                    )
-                    i++
-                }
-                withContext(Dispatchers.Main) {
-                    val intent = packageManager.getLaunchIntentForPackage(packageName)
-                    intent!!.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    startActivity(intent)
-                }
+            launch {
+                saveMenuItems()
             }
         }
-
     }
 
     private fun initView() {
-        mLayoutManager = FlexboxLayoutManager(this)
-        mLayoutManager.flexDirection = FlexDirection.ROW
-        mLayoutManager.flexWrap = FlexWrap.WRAP
+        mLayoutManager = FlexboxLayoutManager(this).apply {
+            flexDirection = FlexDirection.ROW
+            flexWrap = FlexWrap.WRAP
+        }
         mAdapter = HomeMenuAdapter(menuList)
         binding.recyclerView.apply {
             adapter = mAdapter
             layoutManager = mLayoutManager
+            ItemTouchHelper(ItemTouchHelperCallback(mAdapter)).attachToRecyclerView(this)
         }
-        val callback: ItemTouchHelper.Callback = ItemTouchHelperCallback(mAdapter)
-        val itemTouchHelper = ItemTouchHelper(callback)
-        itemTouchHelper.attachToRecyclerView(binding.recyclerView)
     }
 
+    private suspend fun saveMenuItems() {
+        withContext(Dispatchers.IO) {
+            homeMenuDao.deleteAll()
+            homeMenuDao.insertAll(menuList.mapIndexed { index, homeMenu ->
+                HomeMenu(index, homeMenu.title, homeMenu.isEnable)
+            })
+        }
+        
+        withContext(Dispatchers.Main) {
+            restartApp()
+        }
+    }
+
+    private fun restartApp() {
+        Intent.makeRestartActivityTask(componentName).also {
+            startActivity(it)
+        }
+    }
 }
