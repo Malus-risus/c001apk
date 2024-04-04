@@ -1,82 +1,66 @@
 package net.mikaelzero.mojito.loader.glide
 
 import com.bumptech.glide.Glide
-import com.bumptech.glide.integration.okhttp3.OkHttpUrlLoader
+import com.bumptech.glide.integration.okhttp3.OkHttpUrlLoader.Factory
 import com.bumptech.glide.load.model.GlideUrl
 import okhttp3.*
 import okio.*
 import java.io.IOException
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 object GlideProgressSupport {
+    private val LISTENERS = Collections.synchronizedMap(HashMap<String, ProgressListener>())
+    private val PROGRESSES = ConcurrentHashMap<String, Int>()
 
-    fun init(glide: Glide, okHttpClient: OkHttpClient?) {
-        val builder: OkHttpClient.Builder = okHttpClient?.newBuilder() ?: OkHttpClient.Builder()
-        builder.addNetworkInterceptor(createInterceptor(DispatchingProgressListener()))
-        glide.registry.replace(GlideUrl::class.java, InputStream::class.java, OkHttpUrlLoader.Factory(builder.build()))
+    fun init(glide: Glide, okHttpClient: OkHttpClient) {
+        val client = okHttpClient.newBuilder()
+            .addNetworkInterceptor(createInterceptor(DispatchingProgressListener()))
+            .build()
+        glide.registry.replace(GlideUrl::class.java, InputStream::class.java, Factory(client))
     }
 
+    @JvmStatic
     fun forget(url: String) {
-        DispatchingProgressListener.forget(url)
+        val key = url.substringBefore('?')
+        LISTENERS.remove(key)
+        PROGRESSES.remove(key)
     }
 
-    fun expect(url: String, listener: ProgressListener?) {
-        DispatchingProgressListener.expect(url, listener)
+    @JvmStatic
+    fun expect(url: String, listener: ProgressListener) {
+        val key = url.substringBefore('?')
+        LISTENERS[key] = listener
+        PROGRESSES[key] = 0 
     }
 
     private fun createInterceptor(listener: ResponseProgressListener): Interceptor {
-        return Interceptor { chain: Interceptor.Chain ->
+        return Interceptor { chain ->
             val request = chain.request()
             val response = chain.proceed(request)
             response.newBuilder()
-                .body(
-                    OkHttpProgressResponseBody(
-                        request.url, response.body,
-                        listener
-                    )
-                )
+                .body(OkHttpProgressResponseBody(request.url, response.body, listener))
                 .build()
         }
     }
 
     interface ProgressListener {
-        fun update(bytesRead: Long, contentLength: Long, done: Boolean)
+        fun onProgress(progress: Int, bytesRead: Long, contentLength: Long, done: Boolean)
+    }
+
+    private interface ResponseProgressListener {
+        fun update(url: HttpUrl, bytesRead: Long, contentLength: Long)
     }
 
     private class DispatchingProgressListener : ResponseProgressListener {
-        companion object {
-            private val LISTENERS: ConcurrentHashMap<String, ProgressListener> = ConcurrentHashMap()
-            private val PROGRESSES: ConcurrentHashMap<String, Int> = ConcurrentHashMap()
-
-            fun forget(url: String) {
-                val key = url.split("\\?")[0]
-                LISTENERS.remove(key)
-                PROGRESSES.remove(key)
-            }
-
-            fun expect(url: String, listener: ProgressListener?) {
-                if(listener != null) {
-                    LISTENERS[url.split("\\?")[0]] = listener
-                }
-            }
-        }
-
         override fun update(url: HttpUrl, bytesRead: Long, contentLength: Long) {
-            val key = url.toString().split("\\?")[0]
+            val key = url.toString().substringBefore('?')
             val listener = LISTENERS[key] ?: return
+            val progress = if (contentLength != -1L) (100 * bytesRead / contentLength).toInt() else 0
+            val lastProgress = PROGRESSES.getOrDefault(key, 0)
 
-            var lastProgress = PROGRESSES[key]
-            val progress = (100 * bytesRead / contentLength).toInt()
-
-            if (lastProgress == null && bytesRead > 0) {
-                // this is a new request so emit the first progress update
-                listener.update(bytesRead, contentLength, bytesRead == contentLength)
-                lastProgress = progress
-                PROGRESSES[key] = lastProgress
-            }
-
-            if (progress != lastProgress) {
-                listener.update(bytesRead, contentLength, bytesRead == contentLength)
+            if (lastProgress != progress) {
+                LISTENERS[key]?.onProgress(progress, bytesRead, contentLength, bytesRead == contentLength)
                 PROGRESSES[key] = progress
             }
 
@@ -104,26 +88,25 @@ object GlideProgressSupport {
 
         override fun source(): BufferedSource {
             if (bufferedSource == null) {
-                bufferedSource = object : ForwardingSource(responseBody!!.source()) {
-                    private var totalBytesRead: Long = 0
-
-                    @Throws(IOException::class)
-                    override fun read(sink: Buffer, byteCount: Long): Long {
-                        val bytesRead = super.read(sink, byteCount)
-                        val fullLength = responseBody.contentLength()
-                        if (bytesRead != -1L) {
-                            totalBytesRead += bytesRead
-                            progressListener.update(url, totalBytesRead, fullLength)
-                        }
-                        return bytesRead
-                    }
-                }.buffer()
+                bufferedSource = responseSource(responseBody!!.source()).buffer()
             }
             return bufferedSource!!
         }
-    }
 
-    private interface ResponseProgressListener {
-        fun update(url: HttpUrl, bytesRead: Long, contentLength: Long)
+        private fun responseSource(source: Source): Source {
+            return object : ForwardingSource(source) {
+                var totalBytesRead: Long = 0
+
+                @Throws(IOException::class)
+                override fun read(sink: Buffer, byteCount: Long): Long {
+                    val bytesRead = super.read(sink, byteCount)
+                    totalBytesRead += if (bytesRead != -1L) bytesRead else 0
+
+                    progressListener.update(url, totalBytesRead, responseBody!!.contentLength())
+
+                    return bytesRead
+                }
+            }
+        }
     }
 }
