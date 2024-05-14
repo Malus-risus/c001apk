@@ -36,7 +36,7 @@ room = "2.6.1"
 sketch-gif = "2.7.1"
 swiperefreshlayout = "1.1.0"
 utils = "1.1.5.4"
-viewpager2 = "1.0.0"
+viewpager2 = "1.1.0"
 webkit = "1.10.0"
 
 [libraries]
